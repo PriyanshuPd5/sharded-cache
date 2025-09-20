@@ -15,20 +15,13 @@ import (
 	"github.com/yourusername/sharded-cache/internal/handlers"
 )
 
-func main() {
-    nodes := 256
-    dirShards := 64
-    port := 8080
-
+func initServer(nodes, dirShards, port int) (*http.Server, chan struct{}) {
     c := cache.NewCache(nodes, dirShards)
     stop := make(chan struct{})
     c.StartExpirySweeper(1*time.Second, stop)
     c.StartRebalancer(5*time.Second, stop)
 
-    // Router
     r := mux.NewRouter()
-
-    // endpoints (use exported handler functions from handlers package)
     r.HandleFunc("/set", handlers.MakeSetHandler(c)).Methods("POST")
     r.HandleFunc("/get/{key}", handlers.MakeGetHandler(c)).Methods("GET")
     r.HandleFunc("/del/{key}", handlers.MakeDelHandler(c)).Methods("DELETE")
@@ -44,6 +37,15 @@ func main() {
         WriteTimeout: 10 * time.Second,
         IdleTimeout:  60 * time.Second,
     }
+    return srv, stop
+}
+
+func main() {
+    nodes := 256
+    dirShards := 64
+    port := 8080
+
+    srv, stop := initServer(nodes, dirShards, port)
 
     go func() {
         log.Printf("server started at :%d\n", port)
@@ -52,7 +54,6 @@ func main() {
         }
     }()
 
-    // graceful shutdown
     stopSig := make(chan os.Signal, 1)
     signal.Notify(stopSig, syscall.SIGINT, syscall.SIGTERM)
     <-stopSig

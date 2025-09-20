@@ -1,8 +1,8 @@
 package cache
 
 import (
-	"time"
 	"sync/atomic"
+	"time"
 )
 
 // StartExpirySweeper replaced: start timing wheel for expiry management.
