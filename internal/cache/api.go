@@ -193,15 +193,19 @@ func (c *Cache) Delete(key string) (bool, error) {
 }
 
 func (c *Cache) FlushAll() {
-    // Clear nodes concurrently
+    //clear nodes concurrently
     var wg sync.WaitGroup
+    wg.Add(c.nodeCnt)
     for i := 0; i < c.nodeCnt; i++ {
-        wg.Add(1)
         go func(node *CacheNode) {
             defer wg.Done()
+
+            // Lock node, clear map
             node.mu.Lock()
             node.mp = make(map[string]*Entry)
             atomic.StoreInt64(&node.keyCount, 0)
+
+            // Clear timing wheel data under wheel mutex
             node.wheelMu.Lock()
             for s := 0; s < node.wheelSize; s++ {
                 for k := range node.slots[s] {
@@ -210,23 +214,29 @@ func (c *Cache) FlushAll() {
             }
             node.slotMap = make(map[string]int)
             node.wheelMu.Unlock()
+
             node.mu.Unlock()
         }(c.nodes[i])
     }
     wg.Wait()
 
-    // Clear directory shards (can also be done concurrently if needed)
+    //clear directory shards concurrently
+    var dWg sync.WaitGroup
+    dWg.Add(c.dirShardCnt)
     for si := 0; si < c.dirShardCnt; si++ {
-        c.dirLocks[si].Lock()
-        for k := range c.dirShards[si] {
-            delete(c.dirShards[si], k)
-        }
-        c.dirLocks[si].Unlock()
+        go func(shard int) {
+            defer dWg.Done()
+            c.dirLocks[shard].Lock()
+            c.dirShards[shard] = make(map[string]int)
+            c.dirLocks[shard].Unlock()
+        }(si)
     }
+    dWg.Wait()
 
-    // Reset total keys
+    // Reset aggregate counters
     atomic.StoreInt64(&c.totalKeys, 0)
 }
+
 
 func (c *Cache) Keys(pattern string) ([]string, error) {
     outCh := make(chan []string, c.dirShardCnt)
@@ -258,13 +268,11 @@ func (c *Cache) Keys(pattern string) ([]string, error) {
         }(si)
     }
 
-    // Wait for all goroutines
     go func() {
         wg.Wait()
         close(outCh)
     }()
 
-    // Collect results
     out := make([]string, 0, 128)
     for matches := range outCh {
         out = append(out, matches...)
